@@ -28,7 +28,7 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 
 | SI | Description | Status | Unit | Integration | E2E |
 |----|-------------|--------|------|-------------|-----|
-| SI-03.1 | Deps, config namespaces, Compose (MinIO+Redis+worker+FFmpeg) | pending | — | — | — |
+| SI-03.1 | Deps, config namespaces, Compose (MinIO+Redis+worker+FFmpeg) | ✅ done | n/a | n/a | n/a |
 | SI-03.2 | Storage module (S3/MinIO service) | pending | — | — | — |
 | SI-03.3 | Queue module (BullMQ producer) | pending | — | — | — |
 | SI-03.4 | Video entity + migration + VideosModule | pending | — | — | — |
@@ -48,3 +48,18 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 - [ ] `npm run lint` passes
 - [ ] `CLAUDE.md` updated with the videos section, consistent with the code
 - [ ] Git Flow respected (feature/* from dev, no direct commit to main)
+
+## Implementation notes / findings
+
+- **Branch base:** the project's `dev` branch is behind `main` — the delivered Fase 01/02 **code**
+  (auth, users, channels, mail, migrations) lives on `main`, while `dev` only carries planning/skill
+  updates. Since Fase 03 depends on the Fase 02 code, `feature/phase-03-videos` was rebased onto
+  `main` (never committing to `main` directly). This is the only buildable base for the phase.
+- **SI-03.1 validated:** `npx tsc --noEmit` exits **0**; the SI-03.1 files
+  (`storage.config.ts`, `queue.config.ts`, `env.validation.ts`, `app.module.ts`) lint **clean**.
+- **Pre-existing lint debt:** a full `npm run lint` reports ~150 errors, all in **Fase 02 test files**
+  (`test/auth.e2e-spec.ts`, `*.service.spec.ts`, `*.integration-spec.ts`, `create-test-data-source.ts`)
+  — `@typescript-eslint/no-unsafe-*` on `res.body` accesses — surfaced by fresher `@typescript-eslint`
+  versions from a clean install. These pre-date Fase 03 and are **out of scope** per the CLAUDE.md
+  scope-limits rule; the final Definition of Done for the phase will need this baseline addressed
+  (env pin or a separate lint-cleanup task) independently of the video feature.
