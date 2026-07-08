@@ -28,10 +28,7 @@ import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { ListVideosQueryDto } from './dto/list-videos-query.dto';
-import {
-  PaginatedVideosDto,
-  VideoResponseDto,
-} from './dto/video-response.dto';
+import { PaginatedVideosDto, VideoResponseDto } from './dto/video-response.dto';
 import { PresignPartsDto } from './dto/presign-parts.dto';
 import {
   CreateDraftResult,

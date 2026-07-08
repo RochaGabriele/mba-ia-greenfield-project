@@ -24,7 +24,9 @@ export class VideoMetadataService {
   async probe(input: string): Promise<VideoMetadata> {
     const data = await new Promise<ffmpeg.FfprobeData>((resolve, reject) => {
       ffmpeg.ffprobe(input, (err, probed) =>
-        err ? reject(err) : resolve(probed),
+        err
+          ? reject(err instanceof Error ? err : new Error(String(err)))
+          : resolve(probed),
       );
     });
 

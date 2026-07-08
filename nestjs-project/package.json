@@ -104,7 +104,8 @@
     "testEnvironment": "node",
     "testTimeout": 30000,
     "setupFiles": [
-      "dotenv/config"
+      "dotenv/config",
+      "<rootDir>/test/suppress-benign-connection-errors.ts"
     ]
   }
 }

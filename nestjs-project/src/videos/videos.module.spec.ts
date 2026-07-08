@@ -30,6 +30,7 @@ describe('VideosModule', () => {
     }).compile();
 
     expect(module).toBeDefined();
+
     await module.close();
   }, 30000);
 });

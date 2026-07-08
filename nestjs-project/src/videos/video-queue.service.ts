@@ -1,5 +1,5 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import queueConfig from '../config/queue.config';
@@ -12,12 +12,18 @@ import type { ProcessVideoJobData } from './video-processing.constants';
 /** Producer: enqueues the background processing job after an upload completes. */
 @Injectable()
 export class VideoQueueService {
+  private readonly logger = new Logger(VideoQueueService.name);
+
   constructor(
     @InjectQueue(VIDEO_PROCESSING_QUEUE)
     private readonly queue: Queue<ProcessVideoJobData>,
     @Inject(queueConfig.KEY)
     private readonly config: ConfigType<typeof queueConfig>,
-  ) {}
+  ) {
+    // A BullMQ queue's connection 'error' event throws if unhandled (e.g. a transient Redis
+    // issue). Log it instead of crashing the process.
+    this.queue.on('error', (err) => this.logger.error(err.message));
+  }
 
   /**
    * Enqueue the `process` job for a video. Retries with exponential backoff (TD-08);

@@ -30,6 +30,7 @@ describe('VideoQueueService (integration)', () => {
 
   afterAll(async () => {
     await queue.obliterate({ force: true });
+    await queue.close();
     await moduleRef.close();
   });
 

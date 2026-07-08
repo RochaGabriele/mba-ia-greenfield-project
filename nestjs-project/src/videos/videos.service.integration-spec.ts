@@ -65,6 +65,7 @@ describe('VideosService (integration)', () => {
         .catch(() => undefined);
     }
     await queue.obliterate({ force: true }).catch(() => undefined);
+    await queue.close().catch(() => undefined);
     await app.close();
   });
 

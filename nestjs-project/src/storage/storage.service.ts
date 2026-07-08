@@ -252,8 +252,7 @@ export class StorageService implements OnModuleInit {
   private isAlreadyOwned(err: unknown): boolean {
     const e = err as { name?: string };
     return (
-      e?.name === 'BucketAlreadyOwnedByYou' ||
-      e?.name === 'BucketAlreadyExists'
+      e?.name === 'BucketAlreadyOwnedByYou' || e?.name === 'BucketAlreadyExists'
     );
   }
 }

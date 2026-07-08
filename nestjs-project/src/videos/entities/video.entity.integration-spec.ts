@@ -68,7 +68,9 @@ describe('Video entity (integration)', () => {
 
   it('enforces the unique public_id constraint', async () => {
     const channel = await createChannel();
-    await videoRepository.save(buildVideo(channel, { public_id: 'dupPublic01' }));
+    await videoRepository.save(
+      buildVideo(channel, { public_id: 'dupPublic01' }),
+    );
     await expect(
       videoRepository.save(buildVideo(channel, { public_id: 'dupPublic01' })),
     ).rejects.toThrow();
@@ -123,6 +125,10 @@ describe('Video entity (integration)', () => {
     const found = await videoRepository.findOneByOrFail({ id: saved.id });
     expect(found.size_bytes).toBe(tenGb);
     expect(typeof found.size_bytes).toBe('number');
-    expect(found.metadata).toEqual({ width: 1920, height: 1080, codec: 'h264' });
+    expect(found.metadata).toEqual({
+      width: 1920,
+      height: 1080,
+      codec: 'h264',
+    });
   });
 });

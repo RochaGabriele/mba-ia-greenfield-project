@@ -1,8 +1,8 @@
 ---
 kind: phase
 name: phase-03-videos
-stage: implementation
-implementation_status: in_progress
+stage: complete
+implementation_status: completed
 ---
 
 # phase-03-videos — Progress
@@ -41,13 +41,49 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 | SI-03.11 | Wire VideosModule into AppModule + OpenAPI | ✅ done | ✅ app.module compile | ✅ openapi export | n/a |
 | SI-03.12 | Migration runner integration test (videos) | ✅ done | n/a | ✅ apply + revert videos | n/a |
 
-## Definition of Done (to satisfy at close)
+## Definition of Done (satisfied at close)
 
-- [ ] Full test suite green (`docker compose exec nestjs-api npm test` + `npm run test:e2e`)
-- [ ] `npx tsc --noEmit` exits with code 0
-- [ ] `npm run lint` passes
-- [ ] `CLAUDE.md` updated with the videos section, consistent with the code
-- [ ] Git Flow respected (feature/* from dev, no direct commit to main)
+- [x] Full test suite green — **190** unit+integration + **73** e2e passing
+      (`docker compose exec nestjs-api npm test -- --runInBand` + `npm run test:e2e`)
+- [x] `npx tsc --noEmit` exits with code 0
+- [x] `npm run lint` passes (see lint-resolution note below)
+- [x] `CLAUDE.md` updated with the videos section (both root and `nestjs-project/`), consistent
+      with the code
+- [x] Git Flow respected — implemented on `feature/phase-03-videos` (from `main`, since `dev` lacks
+      the Fase 02 code), no direct commits to `main`; per-SI `feat(videos): SI-03.x` commits
+
+### DoD-stage findings (cross-suite regressions surfaced by the full run)
+
+Individual per-SI test runs passed, but the first full-suite run surfaced three issues fixed here:
+
+- **Channel→Video metadata ripple:** the SI-03.4 inverse `@OneToMany` on `Channel` meant every test
+  DataSource with `Channel` but not `Video` failed `Entity metadata for Channel#videos not found`.
+  Fixed centrally in `create-test-data-source.ts` (auto-adds `Video` when `Channel` is present), so
+  the 10 Fase 02 test files need no change.
+- **Flaky BullMQ teardown error (root-caused):** the `video-processing` queue's ioredis connection
+  rejects a still-pending `init()` with a benign `Connection is closed.` when a module/app is torn
+  down before it finishes connecting (compile-then-close module specs, the OpenAPI export). BullMQ
+  re-emits it as an unhandled `'error'` that Node escalates to an async `unhandledRejection`, which
+  lands on whichever Jest suite is running — flaking an unrelated suite non-deterministically.
+  Per-connection handlers (`queue.on('error')` / `waitUntilReady()` before `close()`) could not
+  catch it: the emit fires after the queue's relay is torn down, and `AppModule` opens connections
+  beyond the single queue. Root fix: a shared Jest setup
+  (`src/test/suppress-benign-connection-errors.ts`, wired into both jest configs' `setupFiles`)
+  patches `process.emit` to swallow only that exact benign message and forward everything else —
+  the one hook jest-circus can't strip (it swaps out `uncaughtException`/`unhandledRejection`
+  listeners per test). Verified stable across back-to-back full runs.
+- **E2E must run serially:** `test:e2e` (`jest --config test/jest-e2e.json`) previously defaulted to
+  parallel workers, so two suites truncated/seeded the shared test DB concurrently → FK violations
+  across `users`/`channels`/`videos`/`refresh_tokens`. Pinned `maxWorkers: 1` in `jest-e2e.json` so
+  the documented `npm run test:e2e` is serial by construction.
+- **cleanAllTables FK order:** now deletes `videos` before `channels` (videos FK-references channels).
+- **Lint resolution (chosen with the user):** the ~211 lint errors were overwhelmingly
+  `no-unsafe-*`/`unbound-method` in test files (supertest `res.body` + jest mocks are `any`),
+  pre-dating and extending beyond Phase 03. Resolved by an ESLint override relaxing those rules for
+  `*.spec.ts`/`*.integration-spec.ts`/`*.e2e-spec.ts` (production code stays strict), plus fixing the
+  handful of source cases directly (a Fase 02 `as any`, an ffprobe reject-with-Error, a `Function`
+  type). `npm run lint` now exits 0. The prior "pin the eslint version / separate cleanup task"
+  options were superseded by this cleaner, scoped fix.
 
 ## Implementation notes / findings
 

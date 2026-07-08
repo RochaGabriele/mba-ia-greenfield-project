@@ -67,7 +67,6 @@ describe('Videos (e2e)', () => {
     email: string,
     password = 'password123',
   ): Promise<string> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mailService = (authService as any).mailService;
     let token = '';
     jest
@@ -370,10 +369,10 @@ describe('Videos (e2e)', () => {
         Buffer.alloc(VIDEO_SIZE, 1),
         'video/mp4',
       );
-      const rows = (await dataSource.query(
+      const rows = await dataSource.query(
         'SELECT id FROM "videos" WHERE public_id = $1',
         [draft.publicId],
-      )) as Array<{ id: string }>;
+      );
       const thumbnailKey = `videos/${rows[0].id}/thumbnail.jpg`;
       await storageService.putObject(
         thumbnailKey,

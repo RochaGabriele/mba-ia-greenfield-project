@@ -321,7 +321,9 @@ export class VideosService {
     if (!video || !video.thumbnail_key) {
       throw new VideoNotFoundException();
     }
-    const object = await this.storageService.getObjectRange(video.thumbnail_key);
+    const object = await this.storageService.getObjectRange(
+      video.thumbnail_key,
+    );
     return {
       status: 200,
       headers: {

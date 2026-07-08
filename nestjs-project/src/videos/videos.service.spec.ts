@@ -126,8 +126,7 @@ describe('VideosService', () => {
       });
 
       const collision = new QueryFailedError('INSERT', undefined, new Error());
-      (collision as unknown as { code: string; detail: string }).code =
-        '23505';
+      (collision as unknown as { code: string; detail: string }).code = '23505';
       (collision as unknown as { code: string; detail: string }).detail =
         'Key (public_id)=(abc) already exists.';
       videoRepo.save
@@ -319,9 +318,9 @@ describe('VideosService', () => {
       });
       channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
 
-      await expect(
-        service.abortUpload('user-1', 'pub'),
-      ).rejects.toBeInstanceOf(UploadNotCompletableException);
+      await expect(service.abortUpload('user-1', 'pub')).rejects.toBeInstanceOf(
+        UploadNotCompletableException,
+      );
       expect(storageService.abortMultipartUpload).not.toHaveBeenCalled();
       expect(videoRepo.delete).not.toHaveBeenCalled();
     });
@@ -361,9 +360,9 @@ describe('VideosService', () => {
     it('throws VideoNotFoundException for an unknown publicId', async () => {
       videoRepo.findOne.mockResolvedValue(null);
 
-      await expect(
-        service.getByPublicId('nope', null),
-      ).rejects.toBeInstanceOf(VideoNotFoundException);
+      await expect(service.getByPublicId('nope', null)).rejects.toBeInstanceOf(
+        VideoNotFoundException,
+      );
     });
 
     it('hides a non-ready video from a non-owner (404)', async () => {

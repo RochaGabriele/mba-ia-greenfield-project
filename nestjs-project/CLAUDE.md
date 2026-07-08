@@ -119,8 +119,9 @@ Conventions for **how to write** each kind of test (mocking patterns, AAA struct
 
 These settings are required in `package.json` (jest config) and `test/jest-e2e.json` for the project's tests to work correctly:
 
-- `setupFiles: ["dotenv/config"]` — without this, `.env` is not loaded inside the Jest process. `DB_HOST`, `JWT_SECRET`, etc. fall back to undefined or to the host's `localhost`, breaking container-to-container DNS.
+- `setupFiles: ["dotenv/config", ".../suppress-benign-connection-errors.ts"]` — the first loads `.env` inside the Jest process (without it `DB_HOST`, `JWT_SECRET`, etc. fall back to undefined or the host's `localhost`, breaking container-to-container DNS). The second (`src/test/suppress-benign-connection-errors.ts`) patches `process.emit` to swallow BullMQ's benign `Connection is closed.` teardown error — an async unhandled rejection that otherwise lands on, and flakes, an unrelated later suite. Keep both entries in **both** jest configs.
 - `testRegex: '.*\\.(spec|integration-spec)\\.ts$'` — covers both unit (`*.spec.ts`) and integration (`*.integration-spec.ts`) suffixes.
+- `test/jest-e2e.json` sets `maxWorkers: 1` — the integration/e2e suites share one test DB, so they **must** run serially; without this, parallel workers truncate/seed shared tables concurrently and cause FK violations.
 
 Do not add new test-file suffixes; if a new test type is needed, update the regex deliberately.
 
@@ -148,6 +149,66 @@ NestJS with standard module structure. Source lives in `src/`, compiled output i
 
 - Each domain feature gets its own module (e.g., `UsersModule`, `VideosModule`) registered in `AppModule`
 - Controllers handle HTTP routing; Services hold business logic; both are scoped to their module
+
+## Video Module & Processing Pipeline (Phase 03)
+
+Large-file (up to 10GB) video upload without routing bytes through the API, background processing
+(duration/metadata + thumbnail) via a queue and a dedicated FFmpeg worker, and HTTP-range streaming.
+
+### Module (`src/videos/`)
+
+- `entities/video.entity.ts` — `Video` (`videos` table): `status` enum
+  `draft | uploading | processing | ready | error`, unique 11-char `public_id` (nanoid), FK
+  `channel_id → channels.id`, `storage_key`, `thumbnail_key`, `upload_id`, `size_bytes` (bigint),
+  `duration_seconds`, `metadata` (jsonb), `failure_reason`. Migration `CreateVideos`.
+- `videos.service.ts` — `VideosService`: `createDraft`, `presignParts`, `completeUpload`,
+  `abortUpload`, `getByPublicId`, `listOwn`, `getStreamData`/`getDownloadData`/`getThumbnailData`.
+- `videos.controller.ts` — `VideosController` (`@Controller('videos')`).
+- `video-queue.service.ts` — `VideoQueueService.enqueueProcessing(videoId)` (BullMQ producer).
+- `video-processor.ts` — `VideoProcessor` (`@Processor`, `WorkerHost`) — runs **only in the worker**.
+- `video-metadata.service.ts` — `VideoMetadataService` (fluent-ffmpeg `ffprobe` + `.screenshots`).
+- `video-processing.constants.ts`, `dto/*`.
+
+### Endpoints (all under `/videos`)
+
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| POST | `/videos` | Bearer | Create draft + initiate multipart (413 `UPLOAD_TOO_LARGE` over 10GB) |
+| POST | `/videos/:publicId/upload/part-urls` | Bearer, owner | Presigned PUT URLs per part; `draft→uploading` |
+| POST | `/videos/:publicId/upload/complete` | Bearer, owner | Finalize + `processing` + enqueue (200) |
+| POST | `/videos/:publicId/upload/abort` | Bearer, owner | Abort + remove draft (204) |
+| GET | `/videos` | Bearer | List caller's channel videos, newest first, paginated |
+| GET | `/videos/:publicId` | Public (ready) / owner | Drafts hidden from strangers (404) |
+| GET | `/videos/:publicId/stream` | Public | Range→`206`, no Range→`200`, 416 invalid, 409 not-ready |
+| GET | `/videos/:publicId/download` | Public | `ready` only, `Content-Disposition: attachment` |
+| GET | `/videos/:publicId/thumbnail` | Public | JPEG, 404 until generated |
+
+Write endpoints use the global `JwtAuthGuard`; public reads opt out with `@Public()`. The single-get
+uses `OptionalJwtAuthGuard` (populates the user when a token is present so the owner sees drafts).
+Streaming endpoints are `@SkipThrottle()` (playback issues many range requests).
+
+### Storage, queue, worker (Docker)
+
+- **Object storage** — `StorageService` (`src/storage/`) over `@aws-sdk/client-s3` against **MinIO**
+  (`forcePathStyle: true`). Single bucket `streamtube-videos`; keys `videos/{id}/original/{file}` and
+  `videos/{id}/thumbnail.jpg`. Presigned multipart upload (bytes go client→MinIO, never through the
+  API); ranged `GetObject` for streaming. Config: `src/config/storage.config.ts` (`STORAGE_*`).
+- **Queue** — `QueueModule` (`src/queue/`): BullMQ over **Redis**, queue `video-processing`; job
+  `process` payload `{ videoId }`, 3 attempts + exponential backoff, `removeOnFail: false`. Producer
+  runs on `completeUpload`. Config: `src/config/queue.config.ts` (`REDIS_*`, `VIDEO_PROCESSING_*`).
+- **Worker** — `src/worker.ts` boots `WorkerModule` (`src/worker.module.ts`) as a standalone Nest
+  application context (no HTTP), hosting `VideoProcessor`. The `video-worker` Compose service runs
+  `npm run start:worker:dev`. It reads metadata + thumbnail over a **presigned GET URL** (no full
+  download), uploads the thumbnail, and sets `ready`; terminal failure → `error` + `failure_reason`;
+  idempotent (no-op if already `ready` or the row is gone).
+
+Compose services: `minio` (9000/9001), `redis` (6379), `video-worker` (FFmpeg), alongside `db`,
+`mailpit`, `nestjs-api`. The `db` host port is published as `5433` (internal is still `db:5432`) to
+avoid colliding with other local Postgres instances.
+
+**FFmpeg at runtime is only in the `video-worker`** service; the API never invokes it. FFmpeg is also
+installed in `Dockerfile.dev` so the worker's integration tests (which exercise ffprobe/thumbnail
+in-process) run under `npm test` in the `nestjs-api` container.
 
 ## Code Conventions
 

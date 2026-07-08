@@ -3,6 +3,7 @@
   "rootDir": ".",
   "testEnvironment": "node",
   "testTimeout": 30000,
+  "maxWorkers": 1,
   "testRegex": ".e2e-spec.ts$",
   "transform": {
     "^.+\\.(t|j)s$": [
@@ -12,5 +13,8 @@
       }
     ]
   },
-  "setupFiles": ["dotenv/config"]
+  "setupFiles": [
+    "dotenv/config",
+    "<rootDir>/../src/test/suppress-benign-connection-errors.ts"
+  ]
 }

@@ -51,7 +51,11 @@ describe('VideoMetadataService (integration)', () => {
     metadataService = moduleRef.get(VideoMetadataService);
     storageService = moduleRef.get(StorageService);
 
-    await storageService.putObject(storageKey, await makeSampleVideo(), 'video/mp4');
+    await storageService.putObject(
+      storageKey,
+      await makeSampleVideo(),
+      'video/mp4',
+    );
   }, 60000);
 
   afterAll(async () => {
