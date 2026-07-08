@@ -2,11 +2,13 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -16,6 +18,8 @@ import {
   ApiTags,
   getSchemaPath,
 } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
@@ -31,6 +35,7 @@ import {
 import { PresignPartsDto } from './dto/presign-parts.dto';
 import {
   CreateDraftResult,
+  StreamResult,
   UploadStatusView,
   VideosService,
 } from './videos.service';
@@ -273,5 +278,102 @@ export class VideosController {
     @Param('publicId') publicId: string,
   ): Promise<VideoResponseDto> {
     return this.videosService.getByPublicId(publicId, user?.sub ?? null);
+  }
+
+  @Public()
+  @SkipThrottle()
+  @Get(':publicId/stream')
+  @ApiOperation({
+    summary: 'Stream a video (HTTP Range)',
+    description:
+      'Streams a `ready` video. A Range header yields 206 Partial Content (Content-Range/' +
+      'Accept-Ranges); without it, 200 with Accept-Ranges. Playback starts without a full download.',
+  })
+  @ApiResponse({ status: 200, description: 'Full stream (no Range)' })
+  @ApiResponse({ status: 206, description: 'Partial stream (Range)' })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Video is not ready for playback',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 416,
+    description: 'Requested range not satisfiable',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async stream(
+    @Param('publicId') publicId: string,
+    @Headers('range') rangeHeader: string | undefined,
+    @Res({ passthrough: false }) res: Response,
+  ): Promise<void> {
+    this.pipeStream(
+      res,
+      await this.videosService.getStreamData(publicId, rangeHeader),
+    );
+  }
+
+  @Public()
+  @SkipThrottle()
+  @Get(':publicId/download')
+  @ApiOperation({
+    summary: 'Download a video',
+    description: 'Downloads a `ready` video as an attachment.',
+  })
+  @ApiResponse({ status: 200, description: 'The video file as an attachment' })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Video is not ready for playback',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async download(
+    @Param('publicId') publicId: string,
+    @Res({ passthrough: false }) res: Response,
+  ): Promise<void> {
+    this.pipeStream(res, await this.videosService.getDownloadData(publicId));
+  }
+
+  @Public()
+  @SkipThrottle()
+  @Get(':publicId/thumbnail')
+  @ApiOperation({
+    summary: 'Get a video thumbnail',
+    description: 'Returns the generated JPEG thumbnail.',
+  })
+  @ApiResponse({ status: 200, description: 'JPEG thumbnail' })
+  @ApiResponse({
+    status: 404,
+    description: 'Video or thumbnail not found',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async thumbnail(
+    @Param('publicId') publicId: string,
+    @Res({ passthrough: false }) res: Response,
+  ): Promise<void> {
+    this.pipeStream(res, await this.videosService.getThumbnailData(publicId));
+  }
+
+  private pipeStream(res: Response, result: StreamResult): void {
+    res.status(result.status);
+    for (const [key, value] of Object.entries(result.headers)) {
+      res.setHeader(key, value);
+    }
+    result.stream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(500).end();
+      } else {
+        res.destroy();
+      }
+    });
+    result.stream.pipe(res);
   }
 }

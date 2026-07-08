@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Readable } from 'node:stream';
 import { Inject, Injectable } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -7,9 +8,11 @@ import { QueryFailedError, Repository } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
 import {
   ForbiddenVideoAccessException,
+  InvalidRangeException,
   UploadNotCompletableException,
   UploadTooLargeException,
   VideoNotFoundException,
+  VideoNotReadyException,
 } from '../common/exceptions/domain.exception';
 import storageConfig from '../config/storage.config';
 import { StorageService, type UploadPartRef } from '../storage/storage.service';
@@ -43,6 +46,12 @@ export interface CreateDraftResult {
 export interface UploadStatusView {
   publicId: string;
   status: VideoStatus;
+}
+
+export interface StreamResult {
+  status: number;
+  headers: Record<string, string>;
+  stream: Readable;
 }
 
 @Injectable()
@@ -243,6 +252,134 @@ export class VideosService {
   private async isOwner(video: Video, userId: string): Promise<boolean> {
     const channel = await this.channelsService.findByUserId(userId);
     return channel !== null && channel.id === video.channel_id;
+  }
+
+  /**
+   * Build the response for GET /stream (ready videos only). With a valid Range header it returns a
+   * 206 partial stream (Content-Range/Accept-Ranges); without one, a 200 full stream with
+   * Accept-Ranges. An unsatisfiable range raises 416.
+   */
+  async getStreamData(
+    publicId: string,
+    rangeHeader: string | undefined,
+  ): Promise<StreamResult> {
+    const video = await this.loadReadyVideo(publicId);
+    const head = await this.storageService.headObject(video.storage_key);
+    const total = head.contentLength;
+
+    if (!rangeHeader) {
+      const full = await this.storageService.getObjectRange(video.storage_key);
+      return {
+        status: 200,
+        headers: {
+          'Content-Type': head.contentType,
+          'Content-Length': String(total),
+          'Accept-Ranges': 'bytes',
+        },
+        stream: full.stream,
+      };
+    }
+
+    const { start, end } = this.parseRange(rangeHeader, total);
+    const partial = await this.storageService.getObjectRange(
+      video.storage_key,
+      `bytes=${start}-${end}`,
+    );
+    return {
+      status: 206,
+      headers: {
+        'Content-Type': head.contentType,
+        'Content-Length': String(partial.contentLength),
+        'Content-Range':
+          partial.contentRange ?? `bytes ${start}-${end}/${total}`,
+        'Accept-Ranges': 'bytes',
+      },
+      stream: partial.stream,
+    };
+  }
+
+  /** Build the response for GET /download — the full object as an attachment (ready videos only). */
+  async getDownloadData(publicId: string): Promise<StreamResult> {
+    const video = await this.loadReadyVideo(publicId);
+    const object = await this.storageService.getObjectRange(video.storage_key);
+    return {
+      status: 200,
+      headers: {
+        'Content-Type': object.contentType,
+        'Content-Length': String(object.contentLength),
+        'Content-Disposition': `attachment; filename="${video.original_filename}"`,
+      },
+      stream: object.stream,
+    };
+  }
+
+  /** Build the response for GET /thumbnail. 404 until the worker has generated one. */
+  async getThumbnailData(publicId: string): Promise<StreamResult> {
+    const video = await this.videoRepository.findOne({
+      where: { public_id: publicId },
+    });
+    if (!video || !video.thumbnail_key) {
+      throw new VideoNotFoundException();
+    }
+    const object = await this.storageService.getObjectRange(video.thumbnail_key);
+    return {
+      status: 200,
+      headers: {
+        'Content-Type': object.contentType || 'image/jpeg',
+        'Content-Length': String(object.contentLength),
+      },
+      stream: object.stream,
+    };
+  }
+
+  private async loadReadyVideo(publicId: string): Promise<Video> {
+    const video = await this.videoRepository.findOne({
+      where: { public_id: publicId },
+    });
+    if (!video) {
+      throw new VideoNotFoundException();
+    }
+    if (video.status !== VideoStatus.READY) {
+      throw new VideoNotReadyException();
+    }
+    return video;
+  }
+
+  private parseRange(
+    rangeHeader: string,
+    total: number,
+  ): { start: number; end: number } {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+    if (!match) {
+      throw new InvalidRangeException();
+    }
+    const [, startStr, endStr] = match;
+
+    let start: number;
+    let end: number;
+    if (startStr === '') {
+      // Suffix range: bytes=-N → the last N bytes.
+      const suffix = Number(endStr);
+      if (!Number.isFinite(suffix) || suffix <= 0) {
+        throw new InvalidRangeException();
+      }
+      start = Math.max(total - suffix, 0);
+      end = total - 1;
+    } else {
+      start = Number(startStr);
+      end = endStr === '' ? total - 1 : Number(endStr);
+    }
+
+    if (
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      start > end ||
+      start >= total
+    ) {
+      throw new InvalidRangeException();
+    }
+
+    return { start, end: Math.min(end, total - 1) };
   }
 
   /** Load a video by public_id and assert the caller owns it (via their channel). */

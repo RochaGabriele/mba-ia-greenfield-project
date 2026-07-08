@@ -8,6 +8,7 @@ import { AppModule } from '../src/app.module';
 import { AuthService } from '../src/auth/auth.service';
 import { DomainExceptionFilter } from '../src/common/filters/domain-exception.filter';
 import { ValidationExceptionFilter } from '../src/common/filters/validation-exception.filter';
+import { StorageService } from '../src/storage/storage.service';
 import { cleanAllTables } from '../src/test/create-test-data-source';
 import { VideosModule } from '../src/videos/videos.module';
 
@@ -17,6 +18,7 @@ describe('Videos (e2e)', () => {
   let app: INestApplication<App>;
   let dataSource: DataSource;
   let authService: AuthService;
+  let storageService: StorageService;
   let throttlerStorage: ThrottlerStorageService;
 
   beforeAll(async () => {
@@ -42,6 +44,7 @@ describe('Videos (e2e)', () => {
 
     dataSource = moduleFixture.get(DataSource);
     authService = moduleFixture.get(AuthService);
+    storageService = moduleFixture.get(StorageService);
     throttlerStorage =
       moduleFixture.get<ThrottlerStorageService>(ThrottlerStorage);
   });
@@ -353,6 +356,104 @@ describe('Videos (e2e)', () => {
       expect(res.body.page).toBe(1);
 
       await request(app.getHttpServer()).get('/videos').expect(401);
+    });
+  });
+
+  describe('GET /videos/:publicId/stream, /download, /thumbnail', () => {
+    const VIDEO_SIZE = 2048;
+
+    async function setupReadyVideo(token: string): Promise<string> {
+      const draft = await createDraft(token);
+      // Put a known object at the video's storage key + a thumbnail, then mark it ready.
+      await storageService.putObject(
+        draft.storageKey,
+        Buffer.alloc(VIDEO_SIZE, 1),
+        'video/mp4',
+      );
+      const rows = (await dataSource.query(
+        'SELECT id FROM "videos" WHERE public_id = $1',
+        [draft.publicId],
+      )) as Array<{ id: string }>;
+      const thumbnailKey = `videos/${rows[0].id}/thumbnail.jpg`;
+      await storageService.putObject(
+        thumbnailKey,
+        Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]),
+        'image/jpeg',
+      );
+      await dataSource.query(
+        `UPDATE "videos" SET status = 'ready', thumbnail_key = $2, duration_seconds = 5 WHERE public_id = $1`,
+        [draft.publicId, thumbnailKey],
+      );
+      return draft.publicId;
+    }
+
+    it('streams a byte range as 206 Partial Content', async () => {
+      const token = await registerConfirmAndLogin('streamer@example.com');
+      const publicId = await setupReadyVideo(token);
+
+      const res = await request(app.getHttpServer())
+        .get(`/videos/${publicId}/stream`)
+        .set('Range', 'bytes=0-1023')
+        .expect(206);
+
+      expect(res.headers['content-range']).toBe(`bytes 0-1023/${VIDEO_SIZE}`);
+      expect(res.headers['content-length']).toBe('1024');
+      expect(res.headers['accept-ranges']).toBe('bytes');
+    });
+
+    it('streams the full object as 200 with Accept-Ranges when no Range is sent', async () => {
+      const token = await registerConfirmAndLogin('streamfull@example.com');
+      const publicId = await setupReadyVideo(token);
+
+      const res = await request(app.getHttpServer())
+        .get(`/videos/${publicId}/stream`)
+        .expect(200);
+
+      expect(res.headers['accept-ranges']).toBe('bytes');
+      expect(res.headers['content-length']).toBe(String(VIDEO_SIZE));
+    });
+
+    it('returns 416 for an unsatisfiable range', async () => {
+      const token = await registerConfirmAndLogin('streambad@example.com');
+      const publicId = await setupReadyVideo(token);
+
+      await request(app.getHttpServer())
+        .get(`/videos/${publicId}/stream`)
+        .set('Range', 'bytes=999999-')
+        .expect(416);
+    });
+
+    it('downloads the video as an attachment', async () => {
+      const token = await registerConfirmAndLogin('downloader@example.com');
+      const publicId = await setupReadyVideo(token);
+
+      const res = await request(app.getHttpServer())
+        .get(`/videos/${publicId}/download`)
+        .expect(200);
+
+      expect(res.headers['content-disposition']).toContain('attachment');
+    });
+
+    it('returns the JPEG thumbnail', async () => {
+      const token = await registerConfirmAndLogin('thumbnailer@example.com');
+      const publicId = await setupReadyVideo(token);
+
+      const res = await request(app.getHttpServer())
+        .get(`/videos/${publicId}/thumbnail`)
+        .expect(200);
+
+      expect(res.headers['content-type']).toContain('image/jpeg');
+    });
+
+    it('returns 409 VIDEO_NOT_READY when streaming a non-ready video', async () => {
+      const token = await registerConfirmAndLogin('notready@example.com');
+      const draft = await createDraft(token);
+
+      const res = await request(app.getHttpServer())
+        .get(`/videos/${draft.publicId}/stream`)
+        .expect(409);
+
+      expect(res.body.error).toBe('VIDEO_NOT_READY');
     });
   });
 });

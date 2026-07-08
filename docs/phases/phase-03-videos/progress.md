@@ -37,7 +37,7 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 | SI-03.7 | Complete upload + enqueue processing | ✅ done | ✅ service | ✅ svc vs MinIO+Redis | ✅ complete/abort |
 | SI-03.8 | Video worker: process + metadata + thumbnail | ✅ done | ✅ module compile | ✅ metadata + processor vs FFmpeg/MinIO/Redis/DB | n/a |
 | SI-03.9 | Get/list videos (status polling) | ✅ done | ✅ service | n/a | ✅ get + list |
-| SI-03.10 | Streaming (206) + download + thumbnail | pending | — | — | — |
+| SI-03.10 | Streaming (206) + download + thumbnail | ✅ done | n/a | n/a | ✅ stream/download/thumbnail |
 | SI-03.11 | Wire VideosModule into AppModule + OpenAPI | pending | — | — | — |
 | SI-03.12 | Migration runner integration test (videos) | pending | — | — | — |
 
