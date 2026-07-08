@@ -12,9 +12,10 @@ import {
   VideoNotFoundException,
 } from '../common/exceptions/domain.exception';
 import storageConfig from '../config/storage.config';
-import { StorageService } from '../storage/storage.service';
+import { StorageService, type UploadPartRef } from '../storage/storage.service';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { Video, VideoStatus } from './entities/video.entity';
+import { VideoQueueService } from './video-queue.service';
 
 const PUBLIC_ID_ALPHABET =
   '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -34,6 +35,11 @@ export interface CreateDraftResult {
   status: VideoStatus;
 }
 
+export interface UploadStatusView {
+  publicId: string;
+  status: VideoStatus;
+}
+
 @Injectable()
 export class VideosService {
   constructor(
@@ -41,6 +47,7 @@ export class VideosService {
     private readonly videoRepository: Repository<Video>,
     private readonly channelsService: ChannelsService,
     private readonly storageService: StorageService,
+    private readonly videoQueueService: VideoQueueService,
     @Inject(storageConfig.KEY)
     private readonly storage: ConfigType<typeof storageConfig>,
   ) {}
@@ -127,6 +134,53 @@ export class VideosService {
         ),
       })),
     );
+  }
+
+  /**
+   * Finalize the multipart upload from the client-provided part ETags, move the video to
+   * `processing`, clear the upload id, and enqueue the background processing job. Owner-only.
+   */
+  async completeUpload(
+    userId: string,
+    publicId: string,
+    parts: UploadPartRef[],
+  ): Promise<UploadStatusView> {
+    const video = await this.loadOwnedVideo(userId, publicId);
+
+    const uploadId = video.upload_id;
+    if (video.status !== VideoStatus.UPLOADING || !uploadId) {
+      throw new UploadNotCompletableException();
+    }
+
+    await this.storageService.completeMultipartUpload(
+      video.storage_key,
+      uploadId,
+      parts,
+    );
+    await this.videoRepository.update(
+      { id: video.id },
+      { status: VideoStatus.PROCESSING, upload_id: null },
+    );
+    await this.videoQueueService.enqueueProcessing(video.id);
+
+    return { publicId: video.public_id, status: VideoStatus.PROCESSING };
+  }
+
+  /** Cancel an in-progress upload: abort the multipart upload and remove the draft. Owner-only. */
+  async abortUpload(userId: string, publicId: string): Promise<void> {
+    const video = await this.loadOwnedVideo(userId, publicId);
+
+    const uploadId = video.upload_id;
+    if (
+      (video.status !== VideoStatus.DRAFT &&
+        video.status !== VideoStatus.UPLOADING) ||
+      !uploadId
+    ) {
+      throw new UploadNotCompletableException();
+    }
+
+    await this.storageService.abortMultipartUpload(video.storage_key, uploadId);
+    await this.videoRepository.delete({ id: video.id });
   }
 
   /** Load a video by public_id and assert the caller owns it (via their channel). */

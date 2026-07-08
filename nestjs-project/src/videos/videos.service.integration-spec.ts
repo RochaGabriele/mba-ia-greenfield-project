@@ -1,7 +1,9 @@
+import { getQueueToken } from '@nestjs/bullmq';
 import type { INestApplication } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { Queue } from 'bullmq';
 import { DataSource, Repository } from 'typeorm';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { VerificationToken } from '../auth/entities/verification-token.entity';
@@ -12,6 +14,7 @@ import { StorageService } from '../storage/storage.service';
 import { createTestDataSource } from '../test/create-test-data-source';
 import { User } from '../users/entities/user.entity';
 import { Video, VideoStatus } from './entities/video.entity';
+import { VIDEO_PROCESSING_QUEUE } from './video-processing.constants';
 import { VideosModule } from './videos.module';
 import { VideosService } from './videos.service';
 
@@ -25,6 +28,7 @@ describe('VideosService (integration)', () => {
   let userRepo: Repository<User>;
   let channelRepo: Repository<Channel>;
   let videoRepo: Repository<Video>;
+  let queue: Queue;
   const uploadsToAbort: Array<{ key: string; uploadId: string }> = [];
 
   beforeAll(async () => {
@@ -48,6 +52,7 @@ describe('VideosService (integration)', () => {
     userRepo = dataSource.getRepository(User);
     channelRepo = dataSource.getRepository(Channel);
     videoRepo = dataSource.getRepository(Video);
+    queue = moduleRef.get<Queue>(getQueueToken(VIDEO_PROCESSING_QUEUE));
   });
 
   afterAll(async () => {
@@ -56,6 +61,7 @@ describe('VideosService (integration)', () => {
         .abortMultipartUpload(u.key, u.uploadId)
         .catch(() => undefined);
     }
+    await queue.obliterate({ force: true }).catch(() => undefined);
     await app.close();
   });
 
@@ -170,5 +176,51 @@ describe('VideosService (integration)', () => {
       public_id: draft.publicId,
     });
     expect(video.status).toBe(VideoStatus.UPLOADING);
+  });
+
+  it('completeUpload finalizes the object in MinIO and enqueues a processing job', async () => {
+    await queue.obliterate({ force: true });
+    // Pause so a running worker (SI-03.8+) cannot consume the job before we assert.
+    await queue.pause();
+
+    const { userId } = await createChannel();
+    const draft = await service.createDraft(userId, {
+      title: 'Complete me',
+      filename: 'v.mp4',
+      sizeBytes: 1024,
+    });
+
+    const [{ url }] = await service.presignParts(userId, draft.publicId, [1]);
+    const body = Buffer.from('hello-video-content');
+    const put = await fetch(url, { method: 'PUT', body });
+    const eTag = put.headers.get('etag') as string;
+
+    const result = await service.completeUpload(userId, draft.publicId, [
+      { partNumber: 1, eTag },
+    ]);
+    expect(result.status).toBe(VideoStatus.PROCESSING);
+
+    const video = await videoRepo.findOneByOrFail({
+      public_id: draft.publicId,
+    });
+    expect(video.status).toBe(VideoStatus.PROCESSING);
+    expect(video.upload_id).toBeNull();
+
+    // The object is fully assembled in MinIO.
+    const head = await storageService.headObject(video.storage_key);
+    expect(head.contentLength).toBe(body.length);
+
+    // A processing job was enqueued carrying this video's internal id.
+    const jobs = await queue.getJobs([
+      'waiting',
+      'paused',
+      'delayed',
+      'prioritized',
+    ]);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].data).toEqual({ videoId: video.id });
+
+    await storageService.deletePrefix(`videos/${video.id}/`);
+    await queue.obliterate({ force: true });
   });
 });

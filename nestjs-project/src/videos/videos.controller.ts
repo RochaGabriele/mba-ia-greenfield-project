@@ -1,4 +1,11 @@
-import { Body, Controller, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -9,9 +16,14 @@ import {
 import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
+import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { PresignPartsDto } from './dto/presign-parts.dto';
-import { CreateDraftResult, VideosService } from './videos.service';
+import {
+  CreateDraftResult,
+  UploadStatusView,
+  VideosService,
+} from './videos.service';
 
 @ApiTags('videos')
 @Controller('videos')
@@ -114,5 +126,93 @@ export class VideosController {
     @Body() dto: PresignPartsDto,
   ): Promise<Array<{ partNumber: number; url: string }>> {
     return this.videosService.presignParts(user.sub, publicId, dto.partNumbers);
+  }
+
+  @Post(':publicId/upload/complete')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Complete the upload and start processing',
+    description:
+      'Finalizes the multipart upload with the client-provided part ETags, moves the video to ' +
+      '"processing", and enqueues the background processing job. Owner-only.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Upload completed; processing enqueued',
+    schema: {
+      properties: {
+        publicId: { type: 'string' },
+        status: { type: 'string', example: 'processing' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation failed',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'The caller does not own this video',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Upload cannot be completed in the current state',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async completeUpload(
+    @CurrentUser() user: JwtPayload,
+    @Param('publicId') publicId: string,
+    @Body() dto: CompleteUploadDto,
+  ): Promise<UploadStatusView> {
+    return this.videosService.completeUpload(user.sub, publicId, dto.parts);
+  }
+
+  @Post(':publicId/upload/abort')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Abort an in-progress upload',
+    description:
+      'Aborts the multipart upload and removes the draft video. Owner-only.',
+  })
+  @ApiResponse({ status: 204, description: 'Upload aborted; draft removed' })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'The caller does not own this video',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Upload cannot be aborted in the current state',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async abortUpload(
+    @CurrentUser() user: JwtPayload,
+    @Param('publicId') publicId: string,
+  ): Promise<void> {
+    return this.videosService.abortUpload(user.sub, publicId);
   }
 }

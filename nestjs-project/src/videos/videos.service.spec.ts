@@ -11,6 +11,7 @@ import {
 import storageConfig from '../config/storage.config';
 import { StorageService } from '../storage/storage.service';
 import { Video, VideoStatus } from './entities/video.entity';
+import { VideoQueueService } from './video-queue.service';
 import { VideosService } from './videos.service';
 
 describe('VideosService', () => {
@@ -20,12 +21,16 @@ describe('VideosService', () => {
     save: jest.Mock;
     findOne: jest.Mock;
     update: jest.Mock;
+    delete: jest.Mock;
   };
   let channelsService: { findByUserId: jest.Mock };
   let storageService: {
     createMultipartUpload: jest.Mock;
     presignUploadPart: jest.Mock;
+    completeMultipartUpload: jest.Mock;
+    abortMultipartUpload: jest.Mock;
   };
+  let videoQueueService: { enqueueProcessing: jest.Mock };
 
   beforeEach(async () => {
     videoRepo = {
@@ -33,12 +38,16 @@ describe('VideosService', () => {
       save: jest.fn((v: Video) => Promise.resolve(v)),
       findOne: jest.fn(),
       update: jest.fn(() => Promise.resolve({ affected: 1 })),
+      delete: jest.fn(() => Promise.resolve({ affected: 1 })),
     };
     channelsService = { findByUserId: jest.fn() };
     storageService = {
       createMultipartUpload: jest.fn(),
       presignUploadPart: jest.fn(),
+      completeMultipartUpload: jest.fn(() => Promise.resolve()),
+      abortMultipartUpload: jest.fn(() => Promise.resolve()),
     };
+    videoQueueService = { enqueueProcessing: jest.fn(() => Promise.resolve()) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -46,6 +55,7 @@ describe('VideosService', () => {
         { provide: getRepositoryToken(Video), useValue: videoRepo },
         { provide: ChannelsService, useValue: channelsService },
         { provide: StorageService, useValue: storageService },
+        { provide: VideoQueueService, useValue: videoQueueService },
         {
           provide: storageConfig.KEY,
           useValue: { maxUploadSizeGb: 10, uploadPartSizeMb: 100 },
@@ -213,6 +223,105 @@ describe('VideosService', () => {
       await service.presignParts('user-1', 'pub', [1]);
 
       expect(videoRepo.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('completeUpload', () => {
+    const uploadingVideo = {
+      id: 'v1',
+      public_id: 'pub123abc12',
+      channel_id: 'c1',
+      status: VideoStatus.UPLOADING,
+      upload_id: 'u1',
+      storage_key: 'videos/v1/original/f.mp4',
+    };
+
+    it('completes the upload, sets processing, clears upload_id, and enqueues the job', async () => {
+      videoRepo.findOne.mockResolvedValue({ ...uploadingVideo });
+      channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
+
+      const result = await service.completeUpload('user-1', 'pub', [
+        { partNumber: 1, eTag: 'etag-1' },
+      ]);
+
+      expect(storageService.completeMultipartUpload).toHaveBeenCalledWith(
+        'videos/v1/original/f.mp4',
+        'u1',
+        [{ partNumber: 1, eTag: 'etag-1' }],
+      );
+      expect(videoRepo.update).toHaveBeenCalledWith(
+        { id: 'v1' },
+        { status: VideoStatus.PROCESSING, upload_id: null },
+      );
+      expect(videoQueueService.enqueueProcessing).toHaveBeenCalledWith('v1');
+      expect(result).toEqual({
+        publicId: 'pub123abc12',
+        status: VideoStatus.PROCESSING,
+      });
+    });
+
+    it('throws UploadNotCompletableException when the video is not uploading', async () => {
+      videoRepo.findOne.mockResolvedValue({
+        ...uploadingVideo,
+        status: VideoStatus.DRAFT,
+      });
+      channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
+
+      await expect(
+        service.completeUpload('user-1', 'pub', [{ partNumber: 1, eTag: 'e' }]),
+      ).rejects.toBeInstanceOf(UploadNotCompletableException);
+      expect(storageService.completeMultipartUpload).not.toHaveBeenCalled();
+      expect(videoQueueService.enqueueProcessing).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenVideoAccessException when the caller does not own the video', async () => {
+      videoRepo.findOne.mockResolvedValue({
+        ...uploadingVideo,
+        channel_id: 'other',
+      });
+      channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
+
+      await expect(
+        service.completeUpload('user-1', 'pub', [{ partNumber: 1, eTag: 'e' }]),
+      ).rejects.toBeInstanceOf(ForbiddenVideoAccessException);
+    });
+  });
+
+  describe('abortUpload', () => {
+    it('aborts the multipart upload and removes the draft', async () => {
+      videoRepo.findOne.mockResolvedValue({
+        id: 'v1',
+        channel_id: 'c1',
+        status: VideoStatus.UPLOADING,
+        upload_id: 'u1',
+        storage_key: 'k',
+      });
+      channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
+
+      await service.abortUpload('user-1', 'pub');
+
+      expect(storageService.abortMultipartUpload).toHaveBeenCalledWith(
+        'k',
+        'u1',
+      );
+      expect(videoRepo.delete).toHaveBeenCalledWith({ id: 'v1' });
+    });
+
+    it('throws UploadNotCompletableException when the video is already processing', async () => {
+      videoRepo.findOne.mockResolvedValue({
+        id: 'v1',
+        channel_id: 'c1',
+        status: VideoStatus.PROCESSING,
+        upload_id: 'u1',
+        storage_key: 'k',
+      });
+      channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
+
+      await expect(
+        service.abortUpload('user-1', 'pub'),
+      ).rejects.toBeInstanceOf(UploadNotCompletableException);
+      expect(storageService.abortMultipartUpload).not.toHaveBeenCalled();
+      expect(videoRepo.delete).not.toHaveBeenCalled();
     });
   });
 });

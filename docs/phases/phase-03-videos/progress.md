@@ -34,7 +34,7 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 | SI-03.4 | Video entity + migration + VideosModule | ✅ done | ✅ module compile | ✅ entity vs real DB | n/a |
 | SI-03.5 | Create draft + initiate multipart | ✅ done | ✅ service | ✅ svc vs DB+MinIO | ✅ POST /videos |
 | SI-03.6 | Presign upload part URLs | ✅ done | ✅ service | ✅ svc vs MinIO | ✅ part-urls |
-| SI-03.7 | Complete upload + enqueue processing | pending | — | — | — |
+| SI-03.7 | Complete upload + enqueue processing | ✅ done | ✅ service | ✅ svc vs MinIO+Redis | ✅ complete/abort |
 | SI-03.8 | Video worker: process + metadata + thumbnail | pending | — | — | — |
 | SI-03.9 | Get/list videos (status polling) | pending | — | — | — |
 | SI-03.10 | Streaming (206) + download + thumbnail | pending | — | — | — |

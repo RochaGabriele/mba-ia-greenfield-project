@@ -215,4 +215,74 @@ describe('Videos (e2e)', () => {
       expect(res.body.error).toBe('UPLOAD_NOT_COMPLETABLE');
     });
   });
+
+  describe('POST /videos/:publicId/upload/complete and /abort', () => {
+    async function uploadOnePart(
+      token: string,
+      publicId: string,
+    ): Promise<{ partNumber: number; eTag: string }> {
+      const partsRes = await request(app.getHttpServer())
+        .post(`/videos/${publicId}/upload/part-urls`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ partNumbers: [1] })
+        .expect(201);
+      const url = partsRes.body[0].url as string;
+      const put = await fetch(url, {
+        method: 'PUT',
+        body: Buffer.from('hello-e2e-video'),
+      });
+      expect(put.status).toBe(200);
+      return { partNumber: 1, eTag: put.headers.get('etag') as string };
+    }
+
+    it('completes the full upload and marks the video processing', async () => {
+      const token = await registerConfirmAndLogin('uploader@example.com');
+      const draft = await createDraft(token);
+      const part = await uploadOnePart(token, draft.publicId);
+
+      const res = await request(app.getHttpServer())
+        .post(`/videos/${draft.publicId}/upload/complete`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ parts: [part] })
+        .expect(200);
+
+      expect(res.body.publicId).toBe(draft.publicId);
+      expect(res.body.status).toBe('processing');
+    });
+
+    it('aborts an in-progress upload and removes the draft (204)', async () => {
+      const token = await registerConfirmAndLogin('aborter@example.com');
+      const draft = await createDraft(token);
+      await request(app.getHttpServer())
+        .post(`/videos/${draft.publicId}/upload/part-urls`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ partNumbers: [1] })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/videos/${draft.publicId}/upload/abort`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(204);
+
+      const rows = await dataSource.query(
+        'SELECT id FROM "videos" WHERE public_id = $1',
+        [draft.publicId],
+      );
+      expect(rows).toHaveLength(0);
+    });
+
+    it('returns 403 when a non-owner tries to complete', async () => {
+      const ownerToken = await registerConfirmAndLogin('cowner@example.com');
+      const draft = await createDraft(ownerToken);
+      const otherToken = await registerConfirmAndLogin('cintruder@example.com');
+
+      const res = await request(app.getHttpServer())
+        .post(`/videos/${draft.publicId}/upload/complete`)
+        .set('Authorization', `Bearer ${otherToken}`)
+        .send({ parts: [{ partNumber: 1, eTag: 'x' }] })
+        .expect(403);
+
+      expect(res.body.error).toBe('FORBIDDEN_VIDEO_ACCESS');
+    });
+  });
 });
