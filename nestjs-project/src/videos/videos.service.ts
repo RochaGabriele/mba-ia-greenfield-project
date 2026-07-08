@@ -14,6 +14,11 @@ import {
 import storageConfig from '../config/storage.config';
 import { StorageService, type UploadPartRef } from '../storage/storage.service';
 import { CreateVideoDto } from './dto/create-video.dto';
+import {
+  mapVideoToView,
+  PaginatedVideosDto,
+  VideoResponseDto,
+} from './dto/video-response.dto';
 import { Video, VideoStatus } from './entities/video.entity';
 import { VideoQueueService } from './video-queue.service';
 
@@ -181,6 +186,63 @@ export class VideosService {
 
     await this.storageService.abortMultipartUpload(video.storage_key, uploadId);
     await this.videoRepository.delete({ id: video.id });
+  }
+
+  /**
+   * Public view of a single video. `ready` videos are visible to anyone; drafts/processing/error
+   * videos are only visible to their owner (hidden from strangers as a 404). Owners also see the
+   * raw metadata and any failure reason.
+   */
+  async getByPublicId(
+    publicId: string,
+    userId: string | null,
+  ): Promise<VideoResponseDto> {
+    const video = await this.videoRepository.findOne({
+      where: { public_id: publicId },
+      relations: ['channel'],
+    });
+    if (!video) {
+      throw new VideoNotFoundException();
+    }
+
+    const owner = userId !== null && (await this.isOwner(video, userId));
+    if (video.status !== VideoStatus.READY && !owner) {
+      throw new VideoNotFoundException();
+    }
+
+    return mapVideoToView(video, { includeOwnerFields: owner });
+  }
+
+  /** List the caller's own channel videos (any status), newest first, paginated. */
+  async listOwn(
+    userId: string,
+    page: number,
+    pageSize: number,
+  ): Promise<PaginatedVideosDto> {
+    const channel = await this.channelsService.findByUserId(userId);
+    if (!channel) {
+      return { items: [], total: 0, page, pageSize };
+    }
+
+    const [videos, total] = await this.videoRepository.findAndCount({
+      where: { channel_id: channel.id },
+      relations: ['channel'],
+      order: { created_at: 'DESC' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    });
+
+    return {
+      items: videos.map((v) => mapVideoToView(v, { includeOwnerFields: true })),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
+  private async isOwner(video: Video, userId: string): Promise<boolean> {
+    const channel = await this.channelsService.findByUserId(userId);
+    return channel !== null && channel.id === video.channel_id;
   }
 
   /** Load a video by public_id and assert the caller owns it (via their channel). */

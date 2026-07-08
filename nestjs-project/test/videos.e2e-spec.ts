@@ -285,4 +285,74 @@ describe('Videos (e2e)', () => {
       expect(res.body.error).toBe('FORBIDDEN_VIDEO_ACCESS');
     });
   });
+
+  describe('GET /videos/:publicId', () => {
+    async function makeReady(publicId: string): Promise<void> {
+      await dataSource.query(
+        `UPDATE "videos" SET status = 'ready', thumbnail_key = $2, duration_seconds = 10 WHERE public_id = $1`,
+        [publicId, `videos/${publicId}/thumbnail.jpg`],
+      );
+    }
+
+    it('returns 200 for a ready video anonymously (no owner-only fields)', async () => {
+      const token = await registerConfirmAndLogin('getready@example.com');
+      const draft = await createDraft(token);
+      await makeReady(draft.publicId);
+
+      const res = await request(app.getHttpServer())
+        .get(`/videos/${draft.publicId}`)
+        .expect(200);
+
+      expect(res.body.publicId).toBe(draft.publicId);
+      expect(res.body.status).toBe('ready');
+      expect(res.body.thumbnailUrl).toBe(`/videos/${draft.publicId}/thumbnail`);
+      expect(res.body.channel.nickname).toBeTruthy();
+      expect(res.body.failureReason).toBeUndefined();
+    });
+
+    it('returns 404 for a draft requested anonymously', async () => {
+      const token = await registerConfirmAndLogin('getdraft@example.com');
+      const draft = await createDraft(token);
+
+      const res = await request(app.getHttpServer())
+        .get(`/videos/${draft.publicId}`)
+        .expect(404);
+
+      expect(res.body.error).toBe('VIDEO_NOT_FOUND');
+    });
+
+    it('lets the owner see their own draft', async () => {
+      const token = await registerConfirmAndLogin('getownerdraft@example.com');
+      const draft = await createDraft(token);
+
+      const res = await request(app.getHttpServer())
+        .get(`/videos/${draft.publicId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(res.body.publicId).toBe(draft.publicId);
+      expect(res.body.status).toBe('draft');
+    });
+  });
+
+  describe('GET /videos', () => {
+    it('lists only the caller channel videos and requires auth', async () => {
+      const tokenA = await registerConfirmAndLogin('listA@example.com');
+      await createDraft(tokenA, { ...validBody, filename: 'a1.mp4' });
+      await createDraft(tokenA, { ...validBody, filename: 'a2.mp4' });
+      const tokenB = await registerConfirmAndLogin('listB@example.com');
+      await createDraft(tokenB, { ...validBody, filename: 'b1.mp4' });
+
+      const res = await request(app.getHttpServer())
+        .get('/videos')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(200);
+
+      expect(res.body.total).toBe(2);
+      expect(res.body.items).toHaveLength(2);
+      expect(res.body.page).toBe(1);
+
+      await request(app.getHttpServer()).get('/videos').expect(401);
+    });
+  });
 });

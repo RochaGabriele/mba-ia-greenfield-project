@@ -1,10 +1,13 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
   Post,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -15,9 +18,16 @@ import {
 } from '@nestjs/swagger';
 import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { Public } from '../auth/decorators/public.decorator';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
+import { ListVideosQueryDto } from './dto/list-videos-query.dto';
+import {
+  PaginatedVideosDto,
+  VideoResponseDto,
+} from './dto/video-response.dto';
 import { PresignPartsDto } from './dto/presign-parts.dto';
 import {
   CreateDraftResult,
@@ -214,5 +224,54 @@ export class VideosController {
     @Param('publicId') publicId: string,
   ): Promise<void> {
     return this.videosService.abortUpload(user.sub, publicId);
+  }
+
+  @Get()
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: "List the caller's channel videos",
+    description:
+      "Lists the authenticated caller's own videos (any status), newest first, paginated.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Paginated list of the caller's videos",
+    type: PaginatedVideosDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async list(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: ListVideosQueryDto,
+  ): Promise<PaginatedVideosDto> {
+    return this.videosService.listOwn(user.sub, query.page, query.pageSize);
+  }
+
+  @Public()
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get(':publicId')
+  @ApiOperation({
+    summary: 'Get a single video',
+    description:
+      'Public for `ready` videos; drafts/processing/error videos are only visible to their owner.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Video view',
+    type: VideoResponseDto,
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async getOne(
+    @CurrentUser() user: JwtPayload | undefined,
+    @Param('publicId') publicId: string,
+  ): Promise<VideoResponseDto> {
+    return this.videosService.getByPublicId(publicId, user?.sub ?? null);
   }
 }

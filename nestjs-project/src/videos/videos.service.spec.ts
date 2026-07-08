@@ -20,6 +20,7 @@ describe('VideosService', () => {
     create: jest.Mock;
     save: jest.Mock;
     findOne: jest.Mock;
+    findAndCount: jest.Mock;
     update: jest.Mock;
     delete: jest.Mock;
   };
@@ -37,6 +38,7 @@ describe('VideosService', () => {
       create: jest.fn((v: Partial<Video>) => v as Video),
       save: jest.fn((v: Video) => Promise.resolve(v)),
       findOne: jest.fn(),
+      findAndCount: jest.fn(),
       update: jest.fn(() => Promise.resolve({ affected: 1 })),
       delete: jest.fn(() => Promise.resolve({ affected: 1 })),
     };
@@ -322,6 +324,118 @@ describe('VideosService', () => {
       ).rejects.toBeInstanceOf(UploadNotCompletableException);
       expect(storageService.abortMultipartUpload).not.toHaveBeenCalled();
       expect(videoRepo.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getByPublicId', () => {
+    const readyVideo = {
+      public_id: 'pub_ready',
+      title: 'Ready',
+      status: VideoStatus.READY,
+      duration_seconds: 42,
+      thumbnail_key: 'videos/v1/thumbnail.jpg',
+      channel_id: 'c1',
+      channel: { nickname: 'creator' },
+      created_at: new Date('2026-01-01'),
+      metadata: { width: 1920 },
+      failure_reason: null,
+    };
+
+    it('maps a ready video to the public view for anyone (no owner fields)', async () => {
+      videoRepo.findOne.mockResolvedValue({ ...readyVideo });
+
+      const view = await service.getByPublicId('pub_ready', null);
+
+      expect(view).toMatchObject({
+        publicId: 'pub_ready',
+        title: 'Ready',
+        status: VideoStatus.READY,
+        durationSeconds: 42,
+        thumbnailUrl: '/videos/pub_ready/thumbnail',
+        channel: { nickname: 'creator' },
+      });
+      expect(view.metadata).toBeUndefined();
+      expect(view.failureReason).toBeUndefined();
+    });
+
+    it('throws VideoNotFoundException for an unknown publicId', async () => {
+      videoRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getByPublicId('nope', null),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+    });
+
+    it('hides a non-ready video from a non-owner (404)', async () => {
+      videoRepo.findOne.mockResolvedValue({
+        ...readyVideo,
+        status: VideoStatus.PROCESSING,
+      });
+      channelsService.findByUserId.mockResolvedValue({ id: 'other' });
+
+      await expect(
+        service.getByPublicId('pub', 'user-x'),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+    });
+
+    it('shows a non-ready video to its owner with owner-only fields', async () => {
+      videoRepo.findOne.mockResolvedValue({
+        ...readyVideo,
+        status: VideoStatus.ERROR,
+        failure_reason: 'boom',
+      });
+      channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
+
+      const view = await service.getByPublicId('pub', 'owner');
+
+      expect(view.status).toBe(VideoStatus.ERROR);
+      expect(view.failureReason).toBe('boom');
+      expect(view.metadata).toEqual({ width: 1920 });
+    });
+  });
+
+  describe('listOwn', () => {
+    it('returns the caller channel videos, newest first, paginated', async () => {
+      channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
+      videoRepo.findAndCount.mockResolvedValue([
+        [
+          {
+            public_id: 'a',
+            title: 'A',
+            status: VideoStatus.READY,
+            duration_seconds: null,
+            thumbnail_key: null,
+            channel: { nickname: 'creator' },
+            created_at: new Date(),
+            metadata: null,
+            failure_reason: null,
+          },
+        ],
+        1,
+      ]);
+
+      const result = await service.listOwn('user-1', 1, 20);
+
+      expect(videoRepo.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { channel_id: 'c1' },
+          order: { created_at: 'DESC' },
+          skip: 0,
+          take: 20,
+        }),
+      );
+      expect(result.total).toBe(1);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].publicId).toBe('a');
+    });
+
+    it('returns an empty page when the caller has no channel', async () => {
+      channelsService.findByUserId.mockResolvedValue(null);
+
+      const result = await service.listOwn('user-1', 1, 20);
+
+      expect(result).toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
+      expect(videoRepo.findAndCount).not.toHaveBeenCalled();
     });
   });
 });
