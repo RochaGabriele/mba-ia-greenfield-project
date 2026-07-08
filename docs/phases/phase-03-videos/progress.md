@@ -30,7 +30,7 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 |----|-------------|--------|------|-------------|-----|
 | SI-03.1 | Deps, config namespaces, Compose (MinIO+Redis+worker+FFmpeg) | ✅ done | n/a | n/a | n/a |
 | SI-03.2 | Storage module (S3/MinIO service) | ✅ done | ✅ module compile | ✅ 5 vs real MinIO | n/a |
-| SI-03.3 | Queue module (BullMQ producer) | pending | — | — | — |
+| SI-03.3 | Queue module (BullMQ producer) | ✅ done | ✅ module compile | ✅ vs real Redis | n/a |
 | SI-03.4 | Video entity + migration + VideosModule | pending | — | — | — |
 | SI-03.5 | Create draft + initiate multipart | pending | — | — | — |
 | SI-03.6 | Presign upload part URLs | pending | — | — | — |
