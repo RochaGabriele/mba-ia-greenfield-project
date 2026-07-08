@@ -32,7 +32,7 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 | SI-03.2 | Storage module (S3/MinIO service) | ✅ done | ✅ module compile | ✅ 5 vs real MinIO | n/a |
 | SI-03.3 | Queue module (BullMQ producer) | ✅ done | ✅ module compile | ✅ vs real Redis | n/a |
 | SI-03.4 | Video entity + migration + VideosModule | ✅ done | ✅ module compile | ✅ entity vs real DB | n/a |
-| SI-03.5 | Create draft + initiate multipart | pending | — | — | — |
+| SI-03.5 | Create draft + initiate multipart | ✅ done | ✅ service | ✅ svc vs DB+MinIO | ✅ POST /videos |
 | SI-03.6 | Presign upload part URLs | pending | — | — | — |
 | SI-03.7 | Complete upload + enqueue processing | pending | — | — | — |
 | SI-03.8 | Video worker: process + metadata + thumbnail | pending | — | — | — |
