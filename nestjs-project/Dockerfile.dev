@@ -1,6 +1,9 @@
 FROM node:25.6.0-slim
 
-RUN apt update && apt install -y procps curl
+# ffmpeg/ffprobe are installed here so the video worker's integration tests (which exercise
+# ffprobe + thumbnail generation in-process) can run under `npm test` in this container.
+# At runtime FFmpeg is only executed by the separate video-worker service, never by the API.
+RUN apt update && apt install -y procps curl ffmpeg
 
 WORKDIR /home/node/app
 

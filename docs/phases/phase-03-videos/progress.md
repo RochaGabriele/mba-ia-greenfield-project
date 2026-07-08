@@ -35,7 +35,7 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 | SI-03.5 | Create draft + initiate multipart | ✅ done | ✅ service | ✅ svc vs DB+MinIO | ✅ POST /videos |
 | SI-03.6 | Presign upload part URLs | ✅ done | ✅ service | ✅ svc vs MinIO | ✅ part-urls |
 | SI-03.7 | Complete upload + enqueue processing | ✅ done | ✅ service | ✅ svc vs MinIO+Redis | ✅ complete/abort |
-| SI-03.8 | Video worker: process + metadata + thumbnail | pending | — | — | — |
+| SI-03.8 | Video worker: process + metadata + thumbnail | ✅ done | ✅ module compile | ✅ metadata + processor vs FFmpeg/MinIO/Redis/DB | n/a |
 | SI-03.9 | Get/list videos (status polling) | pending | — | — | — |
 | SI-03.10 | Streaming (206) + download + thumbnail | pending | — | — | — |
 | SI-03.11 | Wire VideosModule into AppModule + OpenAPI | pending | — | — | — |
@@ -94,3 +94,13 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 - **SI-03.2:** `StorageService` over `@aws-sdk/client-s3` (path-style MinIO) — ensureBucket,
   multipart initiate/presign/complete/abort, ranged read, head, put, presign-get, delete-prefix.
   Integration spec exercises real MinIO (5 tests green); module compile spec green.
+- **SI-03.8 (worker):** `VideoProcessor` (@Processor) + `VideoMetadataService` (fluent-ffmpeg) +
+  standalone `WorkerModule`/`worker.ts`; the `video-worker` Compose service runs
+  `npm run start:worker:dev` and consumes the queue (verified booting + gracefully skipping a
+  job whose video was removed). ffprobe/thumbnail read the source over a presigned GET URL (no
+  full download). **FFmpeg in `Dockerfile.dev`:** the worker's integration tests exercise ffprobe
+  + thumbnailing in-process, and `npm test` runs in the `nestjs-api` container — so ffmpeg was
+  added to the dev/test image. Runtime separation is intact: only the `video-worker` service runs
+  FFmpeg for real; the API HTTP process never does. `WorkerModule` registers the full
+  Video→Channel→User entity graph explicitly (no `autoLoadEntities`, since it does not import the
+  domain modules).
