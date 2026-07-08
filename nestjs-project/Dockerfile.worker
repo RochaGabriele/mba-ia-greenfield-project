@@ -1,0 +1,13 @@
+FROM node:25.6.0-slim
+
+# ffmpeg + ffprobe for video metadata extraction and thumbnail generation (phase 03, TD-04).
+RUN apt update && apt install -y procps curl ffmpeg
+
+WORKDIR /home/node/app
+
+USER node
+
+# Dev pattern (same as Dockerfile.dev): the container stays alive with a mounted volume; the
+# worker process is started with `npm run start:worker:dev` (wired in SI-03.8, once src/worker.ts
+# exists). ffmpeg/ffprobe are available on PATH.
+CMD [ "tail", "-f", "/dev/null" ]
