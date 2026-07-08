@@ -37,6 +37,12 @@ describe('Database migrations (integration)', () => {
       ),
       dataSource.query(`DROP TABLE IF EXISTS "migrations" CASCADE`),
     ]);
+    // The status/verification enum types survive a DROP TABLE and may have been
+    // recreated by earlier synchronize-based suites sharing this database; drop them
+    // so the migration's own CREATE TYPE runs against a clean schema regardless of order.
+    await dataSource.query(
+      `DROP TYPE IF EXISTS "verification_tokens_type_enum" CASCADE`,
+    );
   });
 
   afterAll(async () => {

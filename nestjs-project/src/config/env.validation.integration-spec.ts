@@ -6,6 +6,9 @@ const requiredEnv = {
   DB_NAME: 'db',
   JWT_SECRET: 'secret',
   JWT_REFRESH_SECRET: 'refresh-secret',
+  // Required since Phase 03 (SI-03.1): object storage credentials must be present.
+  STORAGE_ACCESS_KEY: 'storage-access',
+  STORAGE_SECRET_KEY: 'storage-secret',
 };
 
 const validate = (env: Record<string, string>) =>
