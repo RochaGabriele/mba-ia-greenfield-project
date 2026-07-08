@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Param, Post } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -10,6 +10,7 @@ import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
+import { PresignPartsDto } from './dto/presign-parts.dto';
 import { CreateDraftResult, VideosService } from './videos.service';
 
 @ApiTags('videos')
@@ -59,5 +60,59 @@ export class VideosController {
     @Body() dto: CreateVideoDto,
   ): Promise<CreateDraftResult> {
     return this.videosService.createDraft(user.sub, dto);
+  }
+
+  @Post(':publicId/upload/part-urls')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Get presigned URLs to upload parts',
+    description:
+      'Returns a presigned PUT URL per requested part number so the client uploads each part ' +
+      'directly to object storage. Owner-only; the first call moves the video to "uploading".',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Presigned part URLs',
+    schema: {
+      type: 'array',
+      items: {
+        properties: {
+          partNumber: { type: 'integer' },
+          url: { type: 'string' },
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation failed',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'The caller does not own this video',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Upload cannot be continued in the current state',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async presignParts(
+    @CurrentUser() user: JwtPayload,
+    @Param('publicId') publicId: string,
+    @Body() dto: PresignPartsDto,
+  ): Promise<Array<{ partNumber: number; url: string }>> {
+    return this.videosService.presignParts(user.sub, publicId, dto.partNumbers);
   }
 }

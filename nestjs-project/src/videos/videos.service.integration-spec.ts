@@ -144,4 +144,31 @@ describe('VideosService (integration)', () => {
     expect(a.publicId).not.toBe(b.publicId);
     expect(await videoRepo.count()).toBe(2);
   });
+
+  it('presignParts returns working part URLs and moves the draft to uploading', async () => {
+    const { userId } = await createChannel();
+    const draft = await service.createDraft(userId, {
+      title: 'T',
+      filename: 'v.mp4',
+      sizeBytes: 5_000_000,
+    });
+    uploadsToAbort.push({ key: draft.storageKey, uploadId: draft.uploadId });
+
+    const urls = await service.presignParts(userId, draft.publicId, [1, 2]);
+    expect(urls).toHaveLength(2);
+    expect(urls.map((u) => u.partNumber)).toEqual([1, 2]);
+
+    for (const { url } of urls) {
+      const put = await fetch(url, {
+        method: 'PUT',
+        body: Buffer.from('x'.repeat(1024)),
+      });
+      expect(put.status).toBe(200);
+    }
+
+    const video = await videoRepo.findOneByOrFail({
+      public_id: draft.publicId,
+    });
+    expect(video.status).toBe(VideoStatus.UPLOADING);
+  });
 });

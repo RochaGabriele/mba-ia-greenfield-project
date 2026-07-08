@@ -91,6 +91,22 @@ describe('Videos (e2e)', () => {
     contentType: 'video/mp4',
   };
 
+  async function createDraft(
+    token: string,
+    body: Record<string, unknown> = validBody,
+  ): Promise<{ publicId: string; uploadId: string; storageKey: string }> {
+    const res = await request(app.getHttpServer())
+      .post('/videos')
+      .set('Authorization', `Bearer ${token}`)
+      .send(body)
+      .expect(201);
+    return res.body as {
+      publicId: string;
+      uploadId: string;
+      storageKey: string;
+    };
+  }
+
   describe('POST /videos', () => {
     it('creates a draft and returns upload coordinates for an authenticated user', async () => {
       const token = await registerConfirmAndLogin('creator@example.com');
@@ -137,6 +153,66 @@ describe('Videos (e2e)', () => {
         .expect(413);
 
       expect(res.body.error).toBe('UPLOAD_TOO_LARGE');
+    });
+  });
+
+  describe('POST /videos/:publicId/upload/part-urls', () => {
+    it('returns presigned part URLs for the owner', async () => {
+      const token = await registerConfirmAndLogin('owner1@example.com');
+      const draft = await createDraft(token);
+
+      const res = await request(app.getHttpServer())
+        .post(`/videos/${draft.publicId}/upload/part-urls`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ partNumbers: [1, 2] })
+        .expect(201);
+
+      expect(res.body).toHaveLength(2);
+      expect(res.body[0]).toMatchObject({ partNumber: 1 });
+      expect(res.body[0].url).toMatch(/^https?:\/\//);
+    });
+
+    it('returns 403 for a non-owner', async () => {
+      const ownerToken = await registerConfirmAndLogin('owner2@example.com');
+      const draft = await createDraft(ownerToken);
+      const otherToken = await registerConfirmAndLogin('intruder@example.com');
+
+      const res = await request(app.getHttpServer())
+        .post(`/videos/${draft.publicId}/upload/part-urls`)
+        .set('Authorization', `Bearer ${otherToken}`)
+        .send({ partNumbers: [1] })
+        .expect(403);
+
+      expect(res.body.error).toBe('FORBIDDEN_VIDEO_ACCESS');
+    });
+
+    it('returns 404 for an unknown publicId', async () => {
+      const token = await registerConfirmAndLogin('owner3@example.com');
+
+      const res = await request(app.getHttpServer())
+        .post('/videos/doesNotExist/upload/part-urls')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ partNumbers: [1] })
+        .expect(404);
+
+      expect(res.body.error).toBe('VIDEO_NOT_FOUND');
+    });
+
+    it('returns 409 when the video is already ready', async () => {
+      const token = await registerConfirmAndLogin('owner4@example.com');
+      const draft = await createDraft(token);
+      await dataSource.query(
+        `UPDATE "videos" SET status = 'ready' WHERE public_id = $1`,
+        [draft.publicId],
+      );
+
+      const res = await request(app.getHttpServer())
+        .post(`/videos/${draft.publicId}/upload/part-urls`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ partNumbers: [1] })
+        .expect(409);
+
+      expect(res.body.error).toBe('UPLOAD_NOT_COMPLETABLE');
     });
   });
 });

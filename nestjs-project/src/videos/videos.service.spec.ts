@@ -2,7 +2,12 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { QueryFailedError } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
-import { UploadTooLargeException } from '../common/exceptions/domain.exception';
+import {
+  ForbiddenVideoAccessException,
+  UploadNotCompletableException,
+  UploadTooLargeException,
+  VideoNotFoundException,
+} from '../common/exceptions/domain.exception';
 import storageConfig from '../config/storage.config';
 import { StorageService } from '../storage/storage.service';
 import { Video, VideoStatus } from './entities/video.entity';
@@ -10,17 +15,30 @@ import { VideosService } from './videos.service';
 
 describe('VideosService', () => {
   let service: VideosService;
-  let videoRepo: { create: jest.Mock; save: jest.Mock };
+  let videoRepo: {
+    create: jest.Mock;
+    save: jest.Mock;
+    findOne: jest.Mock;
+    update: jest.Mock;
+  };
   let channelsService: { findByUserId: jest.Mock };
-  let storageService: { createMultipartUpload: jest.Mock };
+  let storageService: {
+    createMultipartUpload: jest.Mock;
+    presignUploadPart: jest.Mock;
+  };
 
   beforeEach(async () => {
     videoRepo = {
       create: jest.fn((v: Partial<Video>) => v as Video),
       save: jest.fn((v: Video) => Promise.resolve(v)),
+      findOne: jest.fn(),
+      update: jest.fn(() => Promise.resolve({ affected: 1 })),
     };
     channelsService = { findByUserId: jest.fn() };
-    storageService = { createMultipartUpload: jest.fn() };
+    storageService = {
+      createMultipartUpload: jest.fn(),
+      presignUploadPart: jest.fn(),
+    };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -112,6 +130,89 @@ describe('VideosService', () => {
 
       expect(videoRepo.save).toHaveBeenCalledTimes(2);
       expect(result.publicId).toHaveLength(11);
+    });
+  });
+
+  describe('presignParts', () => {
+    it('throws VideoNotFoundException for an unknown publicId', async () => {
+      videoRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.presignParts('user-1', 'unknown', [1]),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+    });
+
+    it('throws ForbiddenVideoAccessException when the caller does not own the video', async () => {
+      videoRepo.findOne.mockResolvedValue({
+        id: 'v1',
+        channel_id: 'other-channel',
+        status: VideoStatus.DRAFT,
+        upload_id: 'u1',
+        storage_key: 'k',
+      });
+      channelsService.findByUserId.mockResolvedValue({ id: 'my-channel' });
+
+      await expect(
+        service.presignParts('user-1', 'pub', [1]),
+      ).rejects.toBeInstanceOf(ForbiddenVideoAccessException);
+    });
+
+    it('throws UploadNotCompletableException when the video is not draft/uploading', async () => {
+      videoRepo.findOne.mockResolvedValue({
+        id: 'v1',
+        channel_id: 'c1',
+        status: VideoStatus.READY,
+        upload_id: 'u1',
+        storage_key: 'k',
+      });
+      channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
+
+      await expect(
+        service.presignParts('user-1', 'pub', [1]),
+      ).rejects.toBeInstanceOf(UploadNotCompletableException);
+    });
+
+    it('transitions draft→uploading and returns one URL per requested part', async () => {
+      videoRepo.findOne.mockResolvedValue({
+        id: 'v1',
+        channel_id: 'c1',
+        status: VideoStatus.DRAFT,
+        upload_id: 'u1',
+        storage_key: 'videos/x/original/f.mp4',
+      });
+      channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
+      storageService.presignUploadPart.mockImplementation(
+        (_k: string, _u: string, n: number) =>
+          Promise.resolve(`https://minio/part-${n}`),
+      );
+
+      const urls = await service.presignParts('user-1', 'pub', [1, 2, 3]);
+
+      expect(videoRepo.update).toHaveBeenCalledWith(
+        { id: 'v1' },
+        { status: VideoStatus.UPLOADING },
+      );
+      expect(urls).toEqual([
+        { partNumber: 1, url: 'https://minio/part-1' },
+        { partNumber: 2, url: 'https://minio/part-2' },
+        { partNumber: 3, url: 'https://minio/part-3' },
+      ]);
+    });
+
+    it('does not re-transition a video that is already uploading', async () => {
+      videoRepo.findOne.mockResolvedValue({
+        id: 'v1',
+        channel_id: 'c1',
+        status: VideoStatus.UPLOADING,
+        upload_id: 'u1',
+        storage_key: 'k',
+      });
+      channelsService.findByUserId.mockResolvedValue({ id: 'c1' });
+      storageService.presignUploadPart.mockResolvedValue('https://minio/part');
+
+      await service.presignParts('user-1', 'pub', [1]);
+
+      expect(videoRepo.update).not.toHaveBeenCalled();
     });
   });
 });

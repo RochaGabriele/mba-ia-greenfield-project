@@ -5,7 +5,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { customAlphabet } from 'nanoid';
 import { QueryFailedError, Repository } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
-import { UploadTooLargeException } from '../common/exceptions/domain.exception';
+import {
+  ForbiddenVideoAccessException,
+  UploadNotCompletableException,
+  UploadTooLargeException,
+  VideoNotFoundException,
+} from '../common/exceptions/domain.exception';
 import storageConfig from '../config/storage.config';
 import { StorageService } from '../storage/storage.service';
 import { CreateVideoDto } from './dto/create-video.dto';
@@ -83,6 +88,63 @@ export class VideosService {
       partSize: this.storage.uploadPartSizeMb * BYTES_PER_MB,
       status: video.status,
     };
+  }
+
+  /**
+   * Return presigned PUT URLs for the requested part numbers so the client uploads each part
+   * directly to storage. Owner-only; the first call transitions the video draft → uploading.
+   */
+  async presignParts(
+    userId: string,
+    publicId: string,
+    partNumbers: number[],
+  ): Promise<Array<{ partNumber: number; url: string }>> {
+    const video = await this.loadOwnedVideo(userId, publicId);
+
+    const uploadId = video.upload_id;
+    if (
+      (video.status !== VideoStatus.DRAFT &&
+        video.status !== VideoStatus.UPLOADING) ||
+      !uploadId
+    ) {
+      throw new UploadNotCompletableException();
+    }
+
+    if (video.status === VideoStatus.DRAFT) {
+      await this.videoRepository.update(
+        { id: video.id },
+        { status: VideoStatus.UPLOADING },
+      );
+    }
+
+    return Promise.all(
+      partNumbers.map(async (partNumber) => ({
+        partNumber,
+        url: await this.storageService.presignUploadPart(
+          video.storage_key,
+          uploadId,
+          partNumber,
+        ),
+      })),
+    );
+  }
+
+  /** Load a video by public_id and assert the caller owns it (via their channel). */
+  private async loadOwnedVideo(
+    userId: string,
+    publicId: string,
+  ): Promise<Video> {
+    const video = await this.videoRepository.findOne({
+      where: { public_id: publicId },
+    });
+    if (!video) {
+      throw new VideoNotFoundException();
+    }
+    const channel = await this.channelsService.findByUserId(userId);
+    if (!channel || video.channel_id !== channel.id) {
+      throw new ForbiddenVideoAccessException();
+    }
+    return video;
   }
 
   /** Insert the draft row, regenerating the public_id on the (astronomically rare) collision. */
