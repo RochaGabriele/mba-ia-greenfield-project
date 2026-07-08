@@ -1,8 +1,8 @@
 ---
 kind: phase
 name: phase-03-videos
-stage: planning-complete
-implementation_status: pending
+stage: implementation
+implementation_status: in_progress
 ---
 
 # phase-03-videos — Progress
@@ -29,7 +29,7 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 | SI | Description | Status | Unit | Integration | E2E |
 |----|-------------|--------|------|-------------|-----|
 | SI-03.1 | Deps, config namespaces, Compose (MinIO+Redis+worker+FFmpeg) | ✅ done | n/a | n/a | n/a |
-| SI-03.2 | Storage module (S3/MinIO service) | pending | — | — | — |
+| SI-03.2 | Storage module (S3/MinIO service) | ✅ done | ✅ module compile | ✅ 5 vs real MinIO | n/a |
 | SI-03.3 | Queue module (BullMQ producer) | pending | — | — | — |
 | SI-03.4 | Video entity + migration + VideosModule | pending | — | — | — |
 | SI-03.5 | Create draft + initiate multipart | pending | — | — | — |
@@ -63,3 +63,34 @@ suite at each step and only advancing when the SI's suite is green, then the ful
   versions from a clean install. These pre-date Fase 03 and are **out of scope** per the CLAUDE.md
   scope-limits rule; the final Definition of Done for the phase will need this baseline addressed
   (env pin or a separate lint-cleanup task) independently of the video feature.
+
+### Implementation session (SI-03.2 onward)
+
+- **Environment bring-up:** full stack up via `docker compose up -d --build` — `db`, `mailpit`,
+  `minio`, `redis`, `nestjs-api`, `video-worker` all healthy. FFmpeg/ffprobe 5.1.9 confirmed in the
+  worker image. Phase 02 migrations applied. `.env` is gitignored and absent on a fresh checkout —
+  recreated from `.env.example` (MAIL_FROM omitted to fall back to the shell-safe code default).
+- **Native bindings:** `node_modules` had been installed on the Windows host, so Linux-only optional
+  native bindings were missing (`@css-inline/css-inline-linux-x64-gnu` via the mailer adapter, the
+  `@unrs/resolver` binding). Fixed with an in-container `npm install` (package-lock unchanged —
+  platform variants only).
+- **Baseline stabilization** (Phase-02 files, needed for a green suite before implementing videos):
+  - `env.validation.integration-spec.ts` — SI-03.1 made `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`
+    Joi-`required`, so the schema spec's minimal env now needs them; added to its `requiredEnv`.
+  - `migrations.integration-spec.ts` — the run is order-fragile: a `synchronize:true` suite creates
+    `verification_tokens_type_enum` before the migration test's `runMigrations`, and `DROP TABLE`
+    does not drop the standalone enum. `beforeAll` now also drops the enum type so `CREATE TYPE`
+    runs against a clean schema regardless of file order.
+  - jest configs (`package.json`, `test/jest-e2e.json`) — enabled ts-jest `isolatedModules` (tsconfig
+    already sets it) and raised `testTimeout` to 30s: the first integration suite's `beforeAll` (cold
+    module + DB/MinIO connect over the slow Docker mount) exceeded the default 5s hook timeout.
+  - `compose.yaml` — mapped the `db` host port to `5433` (internal still `db:5432`) to avoid colliding
+    with another local Postgres already bound to host `5432`.
+  - Result: full suite green — **150 unit+integration** + **52 e2e** passing.
+- **context7 unavailable:** the context7 MCP server is not connected this session. Per CLAUDE.md's
+  fallback, library APIs are verified against `library-refs.md` (distilled from official docs) and the
+  installed versions (`@aws-sdk/client-s3` 3.1081.0, `@aws-sdk/s3-request-presigner` 3.1081.0,
+  `bullmq` 5.79.3, `@nestjs/bullmq` 11.0.4, `fluent-ffmpeg` 2.1.3, `nanoid` 3.3.11 — CJS, as pinned).
+- **SI-03.2:** `StorageService` over `@aws-sdk/client-s3` (path-style MinIO) — ensureBucket,
+  multipart initiate/presign/complete/abort, ranged read, head, put, presign-get, delete-prefix.
+  Integration spec exercises real MinIO (5 tests green); module compile spec green.
