@@ -38,7 +38,7 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 | SI-03.8 | Video worker: process + metadata + thumbnail | ✅ done | ✅ module compile | ✅ metadata + processor vs FFmpeg/MinIO/Redis/DB | n/a |
 | SI-03.9 | Get/list videos (status polling) | ✅ done | ✅ service | n/a | ✅ get + list |
 | SI-03.10 | Streaming (206) + download + thumbnail | ✅ done | n/a | n/a | ✅ stream/download/thumbnail |
-| SI-03.11 | Wire VideosModule into AppModule + OpenAPI | pending | — | — | — |
+| SI-03.11 | Wire VideosModule into AppModule + OpenAPI | ✅ done | ✅ app.module compile | ✅ openapi export | n/a |
 | SI-03.12 | Migration runner integration test (videos) | pending | — | — | — |
 
 ## Definition of Done (to satisfy at close)
@@ -94,6 +94,13 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 - **SI-03.2:** `StorageService` over `@aws-sdk/client-s3` (path-style MinIO) — ensureBucket,
   multipart initiate/presign/complete/abort, ranged read, head, put, presign-get, delete-prefix.
   Integration spec exercises real MinIO (5 tests green); module compile spec green.
+- **Streaming visibility (SI-03.10) — security note:** an automated commit review flagged
+  `loadReadyVideo` as a possible IDOR/visibility bypass. Assessed as the contracted design, not a
+  vulnerability: stream/download/thumbnail serve only `ready` videos, and every `ready` video is
+  intentionally public ("anonymous users watch freely"; Authorization Matrix marks these public).
+  Non-`ready` videos are never served — they return `409 VIDEO_NOT_READY`, which is the plan's
+  explicit contract (Error Catalog + API Contract + the SI-03.10 e2e asserts it). No private content
+  is exposed; `public_id`s are non-enumerable nanoids. No code change (would contradict the AC).
 - **SI-03.8 (worker):** `VideoProcessor` (@Processor) + `VideoMetadataService` (fluent-ffmpeg) +
   standalone `WorkerModule`/`worker.ts`; the `video-worker` Compose service runs
   `npm run start:worker:dev` and consumes the queue (verified booting + gracefully skipping a

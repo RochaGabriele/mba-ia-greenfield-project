@@ -110,6 +110,17 @@ describe('exportSpec (integration)', () => {
     }
   });
 
+  it('includes the video endpoints (Phase 03)', () => {
+    const paths = document.paths as Record<string, unknown>;
+    const videoPaths = Object.keys(paths).filter((p) =>
+      p.startsWith('/videos'),
+    );
+
+    expect(videoPaths.length).toBeGreaterThan(0);
+    expect(paths).toHaveProperty('/videos');
+    expect(paths).toHaveProperty('/videos/{publicId}/stream');
+  });
+
   it('all auth endpoints have a non-empty summary', () => {
     const paths = document.paths as Record<
       string,
