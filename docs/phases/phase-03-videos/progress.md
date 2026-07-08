@@ -39,7 +39,7 @@ suite at each step and only advancing when the SI's suite is green, then the ful
 | SI-03.9 | Get/list videos (status polling) | ✅ done | ✅ service | n/a | ✅ get + list |
 | SI-03.10 | Streaming (206) + download + thumbnail | ✅ done | n/a | n/a | ✅ stream/download/thumbnail |
 | SI-03.11 | Wire VideosModule into AppModule + OpenAPI | ✅ done | ✅ app.module compile | ✅ openapi export | n/a |
-| SI-03.12 | Migration runner integration test (videos) | pending | — | — | — |
+| SI-03.12 | Migration runner integration test (videos) | ✅ done | n/a | ✅ apply + revert videos | n/a |
 
 ## Definition of Done (to satisfy at close)
 
