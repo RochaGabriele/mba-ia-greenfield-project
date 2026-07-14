@@ -103,6 +103,7 @@
     "coverageDirectory": "../coverage",
     "testEnvironment": "node",
     "testTimeout": 30000,
+    "maxWorkers": 1,
     "setupFiles": [
       "dotenv/config",
       "<rootDir>/test/suppress-benign-connection-errors.ts"

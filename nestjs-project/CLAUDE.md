@@ -21,6 +21,9 @@ Only start the NestJS dev server (`npm run start:dev`) when the user **explicitl
 This project runs inside Docker. Always use the container for development:
 
 ```bash
+# Create the env file (first time only) — required for the app/worker to boot
+cp .env.example .env
+
 # Start containers
 docker compose up -d
 
@@ -63,10 +66,10 @@ npm run start:dev                        # Dev server with hot-reload
 npm run build                            # Compile to dist/
 npm run start:prod                       # Run compiled build
 
-npm test                                 # Unit tests
-npm run test:watch                       # Unit tests in watch mode
-npm run test:cov                         # Coverage report
-npm run test:e2e                         # End-to-end tests (always with --runInBand)
+npm test                                 # Unit + integration (serial: maxWorkers 1)
+npm run test:watch                       # Unit + integration in watch mode
+npm run test:cov                         # Coverage report (serial: maxWorkers 1)
+npm run test:e2e                         # End-to-end tests (serial: maxWorkers 1)
 
 npx tsc --noEmit                         # Type-check (required before declaring a task done)
 npm run lint                             # ESLint with auto-fix
@@ -84,14 +87,14 @@ curl http://localhost:3000
 
 ### Test execution
 
-Integration and e2e suites share a single test database. They **must** be run with `--runInBand`:
+Integration and e2e suites share a single test database, so they run **serially**. Serialization is pinned via `maxWorkers: 1` in both jest configs (see "Jest Configuration" below), so no `--runInBand` flag is needed:
 
 ```bash
-docker compose exec nestjs-api npm test -- --runInBand
-docker compose exec nestjs-api npm run test:e2e   # already configured
+docker compose exec nestjs-api npm test           # serial by default (maxWorkers: 1)
+docker compose exec nestjs-api npm run test:e2e   # serial by default (maxWorkers: 1)
 ```
 
-Parallel execution causes FK violations, deadlocks, and cross-suite contamination because suites truncate or seed shared tables concurrently.
+Parallel execution causes FK violations, deadlocks, and cross-suite contamination because suites truncate or seed shared tables concurrently — which is exactly why the config pins `maxWorkers: 1`.
 
 During active development, run only the tests related to the file being changed (`npm test -- path/to/file.spec.ts`). Before declaring a task done, run the full suite — see the global `CLAUDE.md` → "Definition of Done (Technical)".
 
@@ -121,7 +124,7 @@ These settings are required in `package.json` (jest config) and `test/jest-e2e.j
 
 - `setupFiles: ["dotenv/config", ".../suppress-benign-connection-errors.ts"]` — the first loads `.env` inside the Jest process (without it `DB_HOST`, `JWT_SECRET`, etc. fall back to undefined or the host's `localhost`, breaking container-to-container DNS). The second (`src/test/suppress-benign-connection-errors.ts`) patches `process.emit` to swallow BullMQ's benign `Connection is closed.` teardown error — an async unhandled rejection that otherwise lands on, and flakes, an unrelated later suite. Keep both entries in **both** jest configs.
 - `testRegex: '.*\\.(spec|integration-spec)\\.ts$'` — covers both unit (`*.spec.ts`) and integration (`*.integration-spec.ts`) suffixes.
-- `test/jest-e2e.json` sets `maxWorkers: 1` — the integration/e2e suites share one test DB, so they **must** run serially; without this, parallel workers truncate/seed shared tables concurrently and cause FK violations.
+- **Both** jest configs set `maxWorkers: 1` — the `package.json` jest block (for `npm test` / `test:cov` / `test:watch`) and `test/jest-e2e.json` (for `test:e2e`). All of these suites share one test DB, so they **must** run serially; without it, parallel workers truncate/seed shared tables concurrently and cause FK violations. This is why the commands above need no `--runInBand` flag.
 
 Do not add new test-file suffixes; if a new test type is needed, update the regex deliberately.
 
